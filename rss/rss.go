@@ -5,6 +5,7 @@ import (
   "io/ioutil"
   "path"
   "net/http"
+  "strings"
 )
 
 type Item struct {
@@ -21,12 +22,13 @@ type Channel struct {
 
 func FeedLinks(dir string) ([]string, error) {
   feedUrlPath := path.Join(dir, "feed.url")
-  feedUrl, err := ioutil.ReadFile(feedUrlPath)
+  feedUrlBuffer, err := ioutil.ReadFile(feedUrlPath)
   if err != nil {
     return nil, err
   }
+  feedUrl := strings.TrimSpace(string(feedUrlBuffer))
 
-  res, err := http.Get(string(feedUrl))
+  res, err := http.Get(feedUrl)
   if err != nil {
     return nil, err
   }
