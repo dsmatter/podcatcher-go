@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"path"
 	"strings"
-	"github.com/smatter0ne/podcatcher/rss"
+	"github.com/smatter0ne/podcatcher-go/rss"
 )
 
 type NewFiles struct {
