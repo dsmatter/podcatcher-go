@@ -14,6 +14,24 @@ type NewFiles struct {
 	urls []string
 }
 
+type DirChecker struct {
+	cDirs chan string
+	cNewFiles chan NewFiles
+	cEnd chan error
+}
+
+func (dc *DirChecker) start(cDone chan error) {
+	for {
+		select {
+			case dir := <-dc.cDirs:
+				checkDir(dir, dc.cNewFiles)
+			case <-dc.cEnd:
+				cDone <- nil
+				return
+		}
+	}
+}
+
 func torrentEqual(a, b string) bool {
 	return a == b || a+".torrent" == b || a == b+".torrent"
 }
@@ -138,11 +156,26 @@ func downloadNewFiles(nfa []NewFiles) {
 	}
 }
 
+func sendPodcastDirs(files []os.FileInfo, filter string, cDirs chan string, cEnd chan error) {
+	for _, info := range files {
+		fn := info.Name()
+		// Some checks
+		if !info.IsDir() || fn == "." || fn == ".." || !strings.Contains(fn, filter) {
+			continue
+		}
+
+		// Check for feed.url
+		_, err := os.Stat(path.Join(fn, "feed.url"))
+		if err != nil {
+			continue
+		}
+		cDirs <- fn
+	}
+	cEnd <- nil
+}
+
 func main() {
 	filter := ""
-	cNewFiles := make(chan NewFiles)
-	numDirs := 0
-
 	if (len(os.Args) > 1) {
 		filter = os.Args[1]
 	}
@@ -159,28 +192,51 @@ func main() {
 		return
 	}
 
-	for _, info := range files {
-		fn := info.Name()
-		// Some checks
-		if !info.IsDir() || fn == "." || fn == ".." || !strings.Contains(fn, filter) {
-			continue
-		}
+	cPodcastDirs := make(chan string)
+	cEnd := make(chan error)
+	cNewFiles := make(chan NewFiles)
+	go sendPodcastDirs(files, filter, cPodcastDirs, cEnd)
 
-		// Check for feed.url
-		_, err = os.Stat(path.Join(fn, "feed.url"))
-		if err != nil {
-			continue
-		}
+	// Spawn the workers
+	numDirCheckers := 4
+	checkers := make([]DirChecker, numDirCheckers)
+	cCheckerEnds := make(chan error)
 
-		go checkDir(fn, cNewFiles)
-		numDirs++
+	for i := 0; i < numDirCheckers; i++ {
+		checkers[i] = DirChecker{cPodcastDirs, cNewFiles, make(chan error)}
+		go checkers[i].start(cCheckerEnds)
 	}
 
+	cDone := make(chan error)
+	// Distribute end of directories to dir checkers
+	go func() {
+		<-cEnd
+		for _, checker := range checkers {
+			checker.cEnd <- nil
+		}
+	}()
+
+	// Collect all ends of dir checkers
+	go func() {
+		for i := 0; i < numDirCheckers; i++ {
+			<-cCheckerEnds
+		}
+		cDone <- nil
+	}()
+
 	// Gather the results
-	result := make([]NewFiles, numDirs)
-	for i := 0; i < numDirs; i++ {
-		result[i] = <-cNewFiles
-		fmt.Println("Checked", result[i].dir)
+	result := make([]NewFiles, 0)
+
+	// urgs...
+	F:
+	for {
+		select {
+		case newFiles := <-cNewFiles:
+			fmt.Println("Checked", newFiles.dir)
+			result = append(result, newFiles)
+		case <-cDone:
+			break F
+		}
 	}
 
 	// Quit if there is nothing to do
